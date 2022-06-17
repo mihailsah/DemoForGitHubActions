@@ -33,8 +33,9 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v1
         with:
           role-to-assume: "${{ secrets.AWS_DEPLOYMENT_ROLE }}"
-          role-duration-seconds: 1500
+          role-duration-seconds: 900
           aws-region: eu-west-1
+          role-session-name: OIDCSession
 
       - name: Terraform Init
         id: init
