@@ -1,7 +1,7 @@
 name: "Terraform Plan and Apply"
 
 permissions:
-  id-token: write # required to use OIDC authenticationdsadas
+  id-token: write # required to use OIDC authenticatidddondsadas
   contents: read # required to check out the code from the repo
   pull-requests: write # allow GH Action to write in the PR
 
