@@ -1,91 +1,87 @@
-name: 'Terraform'
+name: "Terraform Plan and Apply"
 
-on: [push]
+permissions:
+  id-token: write # required to use OIDC authentication
+  contents: read # required to check out the code from the repo
+  pull-requests: write # allow GH Action to write in the PR
 
-env:
-  TF_LOG: INFO
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 
 jobs:
   terraform:
-    name: 'Terraform'
-    runs-on: ubuntu-latest
-
-    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
-    # Set the working directory to main for the config files
-    defaults:
-      run:
-        shell: bash
-        working-directory: ./main
-
+    name: "Terraform Plan and Apply"
+    runs-on: ubuntu-20.04
     steps:
-    # Checkout the repository to the GitHub Actions runner
-    - name: Checkout
-      uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v3
 
-    # Install the preferred version of Terraform CLI 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v1
-      with:
-        terraform_version: 1.0.11
+      - name: Terraform Install
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.1.6
 
-    # Call aws caller identity 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        role-to-assume: arn:aws:iam::069726535728:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AWSAdministratorAccess_dbf9adc975a917f0
-        aws-region: eu-west-1
-      env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
-          AWS_DEFAULT_REGION: 'eu-west-1'
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -check
 
-    # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
-    - name: Terraform Init
-      id: init
-      run: terraform init
+      - name: Configure AWS
+        id: configure_aws
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: "${{ secrets.AWS_DEPLOYMENT_ROLE }}"
+          role-duration-seconds: 1500
+          aws-region: eu-west-1
 
-    - name: Terraform Validate
-      id: validate
-      run: terraform validate
+      - name: Terraform Init
+        id: init
+        run: terraform init
 
+      - name: Terraform Select Workspace
+        id: fmt-workspace
+        run: "terraform workspace select ${{ secrets.TF_WORKSPACE }} || terraform workspace new ${{ secrets.TF_WORKSPACE }}"
 
-    # Run a terraform plan for pull requests only
-    - name: Terraform Plan
-      id: plan
-      if: github.event_name == 'push'
-      run: terraform plan -no-color
-    
-    # Add a comment to pull requests with plan results
-    - name: add-plan-comment
-      id: comment
-      uses: actions/github-script@v3
-      if: github.event_name == 'push'
-      env:
-        PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
-      with:
-        github-token: ${{ secrets.GHB_TOKEN }}
-        script: |
-          const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
-          #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
-          #### Terraform Validation 🤖${{ steps.validate.outputs.stdout }}
-          #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
-      
-          <details><summary>Show Plan</summary>
-          
-          \`\`\`${process.env.PLAN}\`\`\`
-          
-          </details>
-          
-          *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ env.tf_actions_working_dir }}\`, Workflow: \`${{ github.workflow }}\`*`;
-            
-          github.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
 
-      # On push to main, build or change infrastructure according to Terraform configuration files
-    - name: Terraform Apply
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      run: terraform apply -auto-approve
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'push'
+        run: terraform plan -no-color -input=false
+        continue-on-error: true
+
+      - name: Terraform Validation Report
+        uses: actions/github-script@v6
+        if: github.event_name == 'push'
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GHB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+            <details><summary>Show Plan</summary>
+            \`\`\`\n
+            ${process.env.PLAN}
+            \`\`\`
+            </details>
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false
